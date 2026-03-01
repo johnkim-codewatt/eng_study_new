@@ -1,0 +1,12 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16 # pgvector가 내장된 공식 이미지
+    container_name: tutor_db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: tutor_user
+      POSTGRES_PASSWORD: tutor_password
+      POSTGRES_DB: tutor_history
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
