@@ -18,29 +18,30 @@ def main():
     
     # 4. 타겟 문법 (기본 - 랜덤)
     TARGET_GRAMMAR = None
+
+    # [신규 추가] 오답 복습 모드 설정
+    ENABLE_REVIEW = True
     
+    print("=================================")
     print("\n[System] 초기 설정이 완료되었습니다. 학습을 시작합니다...")
     print("[Tip] 학습 중 언제든지 아래의 명령어를 입력해 설정을 바꿀 수 있습니다.")
     print("  - 레벨 변경: '!레벨 [초보/중급/고수/초고수]' (예: !레벨 초보)")
     print("  - 주제 변경: '!주제 [일상/비즈니스/여행/학교 등]' (예: !주제 비즈니스)")
     print("  - 문법 지정: '!문법 [원하는문법]' (예: !문법 가정법) / 취소: '!문법 리셋'")
     print("  - 문제 넘기기: '다른문제' 또는 '패스'\n")
+    print("=================================")
     
     # 코어 엔진 조립 (LangGraph 및 LLM 체인 로드)
-    # 💡 [AI 스터디 포인트] 
     # AI 구동을 위한 핵심 함수들(문제 생성, 복습 생성, 채점 파이프라인)을 호출할 준비를 합니다.
     from core_engine import build_tutor_graph, generate_question, generate_review_question
     from database import get_recent_mistakes
     tutor_graph = build_tutor_graph()
     
-    # [신규 추가] 오답 복습 모드 설정
-    ENABLE_REVIEW = True
-    
     if ENABLE_REVIEW:
         review_items = get_recent_mistakes(USER_ID, limit=3)
-        if review_items:
+        if review_items: # 최근 3개의 오답 이력이 있으면 복습 모드 실행
             print("\n[System] 💡 오답 복습 모드를 시작합니다. 지난번에 틀렸던 문제들을 먼저 복습할게요!")
-            for idx, item in enumerate(review_items, 1):
+            for idx, item in enumerate(review_items, 1): 
                 print(f"\n==================== [복습 문제 {idx}/{len(review_items)}] ====================")
                 review_data = generate_review_question(item)
                 print(f"\n{review_data['full_guide']}")
@@ -55,7 +56,7 @@ def main():
                     if user_input.strip() == "패스":
                         break
                         
-                    tutor_state = {
+                    tutor_state = { # 공유 상태 정의
                         "user_id": USER_ID,
                         "current_question": review_data["question_text"],
                         "current_input": user_input,
@@ -63,16 +64,18 @@ def main():
                         "is_correct": False,
                         "expected_tag": "",
                         "history_context": "",
-                        "feedback": "",
                         "corrected_text": "",
                         "grammar_tag": "",
-                        "explanation": ""
+                        "explanation": "",
+                        "retry_count": 0,
+                        "reviewer_feedback": ""
                     }
                     
                     # LangGraph 실행 (Retrieve -> Feedback -> Save 순차 실행)
-                    # 💡 [AI 스터디 포인트] 
                     # StateGraph 객체인 tutor_graph에 초기 상태(tutor_state)를 주입하면,
-                    # 정의된 노드(함수)들을 거치며 State 딕셔너리가 업데이트되고 최종 결과를 반환합니다.
+                    # 정의된 노드(함수)들을 거치며 
+                    # State 딕셔너리가 업데이트되고 
+                    # 최종 결과를 반환합니다.
                     result = tutor_graph.invoke(tutor_state)
                     
                     print(f"\n=== [Tutor Feedback] ===")
@@ -157,7 +160,9 @@ def main():
                 "feedback": "",
                 "corrected_text": "",
                 "grammar_tag": "",
-                "explanation": ""
+                "explanation": "",
+                "retry_count": 0,
+                "reviewer_feedback": ""
             }
             
             # LangGraph 실행 (Retrieve -> Feedback -> Save)

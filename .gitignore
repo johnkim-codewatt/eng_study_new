@@ -10,6 +10,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Node.js
+node_modules/
+.next/
+client/.next/
+
 # Data & DB Volumes
 postgres_data/
 

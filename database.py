@@ -110,6 +110,8 @@ def search_history(user_id: str, current_input: str, limit: int = 10, expected_t
     
     return results
 
+# [신규 추가] 최근 오답 이력 조회
+# 최근 3개의 오답 이력을 가져옴
 def get_recent_mistakes(user_id: str, limit: int = 3):
     """지정된 유저의 가장 최근 오답 이력을 가져옵니다. 복습용으로 사용됩니다."""
     conn = get_connection()
@@ -128,6 +130,35 @@ def get_recent_mistakes(user_id: str, limit: int = 3):
     cur.close()
     conn.close()
     
+    return results
+
+def get_top_mistake_grammars(user_id: str, limit: int = 10):
+    """가장 많이 틀린 문법 태그 기준으로 대표 오답 1건씩 반환합니다. 복습 모드에서 사용됩니다."""
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # grammar_point별 오답 횟수를 집계하고, 각 태그에서 가장 최근 레코드 1건만 추출
+    cur.execute("""
+        WITH ranked AS (
+            SELECT
+                original_sentence, corrected_sentence, grammar_point, explanation,
+                COUNT(*) OVER (PARTITION BY grammar_point) AS cnt,
+                ROW_NUMBER() OVER (PARTITION BY grammar_point ORDER BY created_at DESC) AS rn
+            FROM mistake_history
+            WHERE user_id = %s
+              AND grammar_point IS NOT NULL
+              AND grammar_point != ''
+        )
+        SELECT original_sentence, corrected_sentence, grammar_point, explanation
+        FROM ranked
+        WHERE rn = 1
+        ORDER BY cnt DESC
+        LIMIT %s
+    """, (user_id, limit))
+
+    results = cur.fetchall()
+    cur.close()
+    conn.close()
     return results
 
 # 모듈 단독 실행 시 테이블 자동 생성 보장

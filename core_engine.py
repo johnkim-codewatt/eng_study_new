@@ -1,4 +1,5 @@
 import os
+import yaml
 from typing import TypedDict, Annotated, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
@@ -8,41 +9,39 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# 프롬프트 YAML 로드 (prompts/prompts.yaml)
+_PROMPT_PATH = os.path.join(os.path.dirname(__file__), "prompts", "prompts.yaml")
+with open(_PROMPT_PATH, encoding="utf-8") as _f:
+    PROMPTS = yaml.safe_load(_f)
+
 # 유저 설정에 따른 라우팅을 지원하는 기본 모델 설정 (gpt-4o-mini)
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
-CORRECTNESS_THRESHOLD = 8  # 정답 인정 기준 점수 (0~10)
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
+CORRECTNESS_THRESHOLD = 7  # 정답 인정 기준 점수 (0~10)
+
 
 # 0. 문제 출제 엔진 추가 (Step 4.1)
-def generate_question(level: str, topic: str, target_grammar: str = None) -> Dict[str, str]:
+def generate_question(level: str, topic: str, target_grammar: str = None, current_question: str = "") -> Dict[str, str]:
+    # null처리
+    current_question = current_question if current_question else ""
+
     """유저의 레벨과 주제에 맞춰 학습할 문법, 예문, 그리고 영작할 한국어 문장을 출제합니다. target_grammar가 주어지면 해당 문법을 무조건 출제합니다."""
     print(f"\n[GenerateQuestion] {level} 레벨의 '{topic}' 주제로 문제 생성 중...")
     
     grammar_instruction = f"유저가 오늘 영작해 볼 만한 핵심 문법 패턴 '{target_grammar}'에 대해 집중적으로 다루어 줘." if target_grammar else "유저가 오늘 영작해 볼 만한 핵심 문법 패턴 1가지를 랜덤하게 선정해."
     
-    system_prompt = f"""너는 친절하고 전문적인 영어 학습 튜터야.
-주어진 학습 레벨과 주제에 맞춰, {grammar_instruction}
-그리고 그 문법에 대한 간단한 설명, 영어 예문 1개, 그리고 유저가 직접 영작해 볼 한국어 문제 1개를 출제해 줘.
-
-[매우 중요] 출제하는 '한국어 영작 문제(Question)'는 반드시 네가 선정한 '오늘의 문법(Grammar)' 패턴을 100% 정확하게 평가할 수 있어야 하며, 문법적으로 모순이 없어야 해.
-예를 들어, '현재완료형(Present Perfect)'을 주제로 잡았다면, 한국어 문제에 '어제, 지난 주말' 같은 명백한 과거 시제 부사를 넣어서 유저가 오답을 쓰도록 유도하면 절대 안 돼!
-
-모든 설명과 출력은 반드시 **한국어**로 작성해야 해. 
-
-다음과 같은 항목들로 명확히 구분해서 출력해줘:
-1. 오늘의 문법 (Grammar)
-2. 간단한 설명 (Explanation)
-3. 예문 (Example)
-4. 영작 문제 (Question) - 유저가 영어로 번역해야 할 한국어 문장
-"""
-    
-    human_prompt = "레벨: {level}, 주제: {topic}\n오늘의 문제를 내 줘!"
+    system_prompt = PROMPTS["generate_question"]["system"].format(
+        grammar_instruction=grammar_instruction,
+        current_question=current_question
+    )
+    human_prompt = PROMPTS["generate_question"]["human"]
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
         ("human", human_prompt)
     ])
-    # 무논리 환각을 줄이기 위해 온도를 0.4로 조정
-    diverse_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.4)
+    # 무논리 환각을 줄이기 위해 온도를 조정 0.4X
+    # 이렇게 하면 문제 생성시, 매번 같은 문제만 출제함. 0.8로 수정하니 굉장히 다양한 문제 출제됨.
+    diverse_llm = ChatOpenAI(model="gpt-4o", temperature=0.8)
     chain = prompt | diverse_llm
     response = chain.invoke({"level": level, "topic": topic})
     raw_content = response.content
@@ -64,30 +63,15 @@ def generate_review_question(history_record: tuple) -> Dict[str, str]:
     original, corrected, grammar_point, explanation = history_record
     print(f"\n[ReviewQuestion] 과거 오답 '{grammar_point}' 복습 문제 생성 중...")
     
-    system_prompt = """너는 친절하고 꼼꼼한 영어 학습 튜터야.
-유저가 과거에 틀렸던 아래의 오답 내용을 바탕으로, 유저가 다시 비슷한 형태의 문장을 영작해 보며 연습할 수 있도록 새로운 한국어 영작문 1개를 출제해 줘.
-
-[과거 오답 기록]
-- 유저 제출: {original}
-- 올바른 문장: {corrected}
-- 핵심 문법 주제: {grammar_point}
-- 당시 튜터 설명: {explanation}
-
-반드시 다음과 같은 항목들로 명확히 구분해서 **한국어**로 출력해 줘.
-
-1. 복습 도입부 (Intro): "복습 시간입니다. 지난번 틀렸던 [문법주제]에 대해서 살펴볼게요." 와 같은 친절하고 격려하는 도입부 및 문법 설명 요약
-2. 새로운 예문 (Example): {grammar_point} 문법을 잘 보여주는 완전히 새로운 영어 예문 1개와 한국어 뜻
-3. 영작 문제 (Question): 유저가 직접 다시 영어로 번역해야 할 **새로운 한국어 문장 1개** (오직 한국어 문제만 제시하고, 절대 정답이나 이유를 미리 출력하지 마세요)
-"""
-    
-    human_prompt = "나의 과거 실수를 바탕으로 복습 문제를 하나 내 줘."
+    system_prompt = PROMPTS["generate_review"]["system"]
+    human_prompt = PROMPTS["generate_review"]["human"]
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
         ("human", human_prompt)
     ])
     
-    diverse_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
+    diverse_llm = ChatOpenAI(model="gpt-4o", temperature=0.7)
     chain = prompt | diverse_llm
     response = chain.invoke({
         "original": original,
@@ -127,33 +111,18 @@ class TutorState(TypedDict):
     grammar_tag: str        # 주요 문법 에러 태그 (예: "article", "tense")
     explanation: str        # 추가된 설명 필드 (선택 사항)
     better_expression: str  # (신규) 일상/구어체 추천 표현
+    retry_count: int        # (신규) 검증 피드백 반복 횟수
+    reviewer_feedback: str  # (신규) 검증관이 재작성을 요청한 피드백 내용
 
 # 2. RetrieveNode 구현 (사전 판별 + 스마트 검색)
 # 💡 [AI 스터디 포인트] Intent Classification & Routing (의도 분류 및 라우팅)
-# 무작정 무거운 메인 LLM을 부르기 전에, 유저의 텍스트가 번역 시도인지 단순 잡담인지를 판별하고
-# 만약 정답이라면 뒤의 무거운 RAG 단계를 아예 스킵해버리는 비용/속도 최적화 기법입니다.
+# 무작정 무거운 메인 LLM을 부르기 전에, 
+# 1. 유저의 텍스트가 번역 시도인지 단순 잡담인지를 판별하고
+# 2. 만약 정답이라면 뒤의 무거운 RAG 단계를 아예 스킵해버리는 비용/속도 최적화 기법입니다.
 def retrieve_node(state: TutorState) -> Dict[str, Any]:
-    print(f"\n[RetrieveNode] 유저 입력 분석 및 1차 검증 시작...")
-    
-    pre_eval_prompt = """유저의 입력을 분석하고 평가해 줘.
-출제된 한국어 영작 문제: {current_question}
-유저 입력: {current_input}
+    print(f"\n[RetrieveNode] 유저 입력 분석 및 1차 검증 시작(잡담 필터링)...")
 
-분류 기준:
-1. Intent: 다음 중 하나로 분류해.
-   - 'new_question': 유저가 명시적으로 다른 문제나 새로운 영작 문제를 내달라고 요구하는 경우 (예: "다른문제", "패스", "다른 문장")
-   - 'unrelated': 영어 학습과 전혀 무관한 질문이나 대화 (예: "안녕", "오늘 날씨 어때", "배고파")
-   - 'question': 영작 시도와 무관한 일반적인 영어 문법, 단어, 학습 방법에 대한 질문인 경우 (예: "현재완료가 뭐야?", "이 단어 뜻 알려줘")
-   - 'translation': 출제된 한국어 영작 문제에 대해 영어로 번역/작문을 직접 시도한 경우 (기본)
-
-2. Score: 만약 Intent가 'translation'이라면, 이 영작의 정확도와 자연스러움을 0에서 10 사이의 점수로 평가해 (10점이 완벽한 원어민 수준). 그 외 Intent는 0점.
-3. Tag: 만약 Intent가 'translation'이고 문법적 오류가 있다면 가장 핵심적인 문법 규칙 1단어(예: Article, Tense). 완벽한 문장(10점)이거나 그 외 Intent는 'None'.
-
-출력 형식:
-Intent: [분류단어]
-Score: [점수]
-Tag: [태그 단어]
-"""
+    pre_eval_prompt = PROMPTS["retrieve"]["pre_eval"]
     chain = ChatPromptTemplate.from_template(pre_eval_prompt) | llm
     eval_res = chain.invoke({
         "current_question": state.get("current_question", "없음"),
@@ -198,20 +167,17 @@ Tag: [태그 단어]
             history_context = "과거 오답 기록이 없습니다."
             print("[디버깅] 검색top3 : 없음")
         else:
-            history_lines = []
-            debug_lines = []
-            for idx, row in enumerate(raw_history, 1):
-                original, corrected, grammar, explanation = row
-                history_lines.append(f"{idx}. 이전입력: '{original}' -> 피드백: '{corrected}' (태그: {grammar})")
-                debug_lines.append(f"{idx}. {original} ({grammar})")
+            # 💡 연관성 1위(Top 1) 오답 1개만 추출하여 LLM 채점관에게 컨텍스트로 제공
+            top1_original, top1_corrected, top1_grammar, _ = raw_history[0]
+            history_context = f"1. 이전입력: '{top1_original}' -> 피드백: '{top1_corrected}' (태그: {top1_grammar})"
             
-            history_context = "\\n".join(history_lines)
+            debug_lines = [f"{idx}. {r[0]} ({r[2]})" for idx, r in enumerate(raw_history[:3], 1)]
             
             # [디버깅] 검색된 내용 터미널 출력
-            print(f"\n---")
-            print(f"[디버깅] 검색top3 : {', '.join(debug_lines[:3])}")
-            print(f"[디버깅] 최종문장(입력) : {state['current_input']}")
-            print(f"---")
+            print(f"\n---------------------------------------")
+            print(f"[디버깅] 검색top3 : {', '.join(debug_lines)}")
+            print(f"[디버깅] 최종 선택된 오답 : {top1_original} / {top1_grammar} 문법틀림")
+            print(f"------------------------------------------")
             
         print(f"[RetrieveNode] 검색 완료. 컨텍스트 길이: {len(history_context)}")
         
@@ -233,44 +199,35 @@ def feedback_node(state: TutorState) -> Dict[str, Any]:
     elif intent == "question":
         print("[FeedbackNode] 일반 학습 질문에 답변 생성 중...")
         prompt = ChatPromptTemplate.from_messages([
-            ("system", "너는 친절하고 전문적인 영어 학습 튜터야. 유저의 영어 학습 관련 일반적인 질문에 알기 쉽고 친절하게 한국어로 대답해줘."),
+            ("system", PROMPTS["feedback"]["question_system"]),
             ("human", "{current_input}")
         ])
         ans = (prompt | llm).invoke({"current_input": state["current_input"]}).content
         return {"feedback": ans, "corrected_text": "", "grammar_tag": "", "explanation": "", "better_expression": ""}
         
-    """검색된 과거 이력과 현재 입력 문장을 LLM에 전달하여 '기억력' 기반 피드백을 생성합니다."""
+    """검색된 '과거 오답 이력'과 '현재 입력 문장'을 LLM에 전달하여 '기억력' 기반 피드백을 생성합니다."""
     # 💡 [AI 스터디 포인트] RAG (Retrieval-Augmented Generation)
     # 데이터베이스에서 찾아온 유저의 과거 오답 이력(<history_context>)을 시스템 프롬프트에 동적으로 "주입"합니다.
     # LLM은 원래 유저를 모르지만, 이 주입된 컨텍스트 덕분에 "지난번에도 틀렸네요!"라는 개인화된 대답이 가능해집니다.
     print("[FeedbackNode] LLM 번역 피드백 생성 중...")
     
-    # System Prompt: '기억력' 구현 전략 + 한국어 응답 강제 + 과거 이력 멘션
-    system_prompt = f"""너는 유저의 오답 패턴을 분석하는 훌륭하고 매우 친절한 영어 튜터다.
-유저가 번역해야 할 '한국어 원래 문제'의 의도와 문맥을 바탕으로 유저의 영작을 평가해야 해.
-단순히 유저가 만든 영어 문장이 문법적으로 맞는지 틀린지만 보지 말고, 원래 한국어 문제에서 의도했던 시제나 핵심 문법(예: 현재완료형 등)을 제대로 구현했는지 확인해 줘.
-만약 한국어 문제에 제시된 시간 부사(예: 지난 주말)와 요구되는 문법(예: 현재완료형) 사이에 문법적 충돌이 생긴다면, 어느 한쪽으로 맞추어(예: 부사를 빼거나, 과거형으로만 쓰거나) 친절하게 대안 두 가지를 모두 설명해 주는 것도 좋아.
+    current_question = state.get("current_question", "")
+    current_input = state.get("current_input", "")
 
-제공된 <history_context>를 살펴보고, 만약 유저가 과거에도 이번과 유사한 문법(특히 {state.get("expected_tag", "")})을 틀린 적이 있다면, 피드백 메시지에 반드시 그 점을 상기시켜 줘. 
-(예시: "자주 틀리는 오답이네요! 지난번에도 관사를 빠뜨리셨는데, 이번에도 같은 실수가 보이네요. 주의해 보세요!")
-만약 처음 틀리는 부분이라면 친절하게 설명만 해 줘.
+    system_prompt = PROMPTS["feedback"]["translation_system"].format(
+        current_question=current_question,
+        current_input=current_input,
+        expected_tag=state.get("expected_tag", ""),
+        history_context=state["history_context"]
+    )
 
-모든 피드백과 설명은 반드시 **한국어(Korean)**로 작성해야 해 (교정된 영어 문장 제외).
-
-<history_context>
-{state["history_context"]}
-</history_context>
-
-또한, 최종 결과로 다음 항목들은 반드시 별도로 구분해서 출력해줘.
-1. 따뜻하고 분석적인 피드백 메시지 (과거 이력이 반영된 내용)
-2. 수정된 완벽한 원어민 문장 (Corrected Text)
-3. 핵심 문법 오류 태그 단어 1개 (Grammar Tag) - 짧은 영어 단어
-4. 오답 이유에 대한 간단한 한국어 설명 (Explanation)
-5. 추천 표현 (Better Expression) - "일상에서는 이렇게 쓰면 좋습니다: ~" 같이 원어민들이 더 자주 쓰는 자연스러운 구어체 대안 1개 제안
-"""
-    
-    human_prompt = "출제된 한국어 문제: {current_question}\\n내 영작을 평가하고 교정해 줘: \\n{current_input}"
-    
+    reviewer_feedback = state.get("reviewer_feedback", "")
+    if reviewer_feedback:
+        print(f"[FeedbackNode] ⚠️ 수석 교사(QA)의 지시를 받아 피드백을 재작성 중입니다... (재시도: {state.get('retry_count', 0)}회)")
+        human_prompt = PROMPTS["feedback"]["human_retry"].format(reviewer_feedback=reviewer_feedback)
+    else:
+        human_prompt = PROMPTS["feedback"]["human_normal"]
+        
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
         ("human", human_prompt)
@@ -288,14 +245,17 @@ def feedback_node(state: TutorState) -> Dict[str, Any]:
     # 간단한 파싱 로직 (실무에서는 Structured Output 활용 권장)
     # 여기서는 간단히 전체를 feedback으로 담고, 추후 파싱 로직 고도화 필요
     feedback = raw_feedback
-    corrected_text = state.get("current_input", "")
-    grammar_tag = state.get("expected_tag", "None")
+    
+    # 안전한 파싱을 위한 초기값 할당
+    corrected_text = ""
+    grammar_tag = ""
     explanation = ""
+    better_expression = ""
     
     if "Corrected Text" in raw_feedback:
         try:
             # 예시 파싱 (추후 Structured Output 등 도입 시 수정)
-            corrected_text = raw_feedback.split("Corrected Text")[1].split("\\n")[0].replace(":", "").strip()
+            corrected_text = raw_feedback.split("Corrected Text")[1].split("\n")[0].replace(":", "").strip()
         except:
             pass
             
@@ -303,7 +263,7 @@ def feedback_node(state: TutorState) -> Dict[str, Any]:
          try:
             # "Grammar Tag" 텍스트 이후부터 다음 번호 매기기 전까지 혹은 첫 줄바꿈까지만 추출
             grammar_tag_raw = raw_feedback.split("Grammar Tag")[1].split("4. 오답")[0]
-            grammar_tag = grammar_tag_raw.split("\\n")[0].replace(":", "").replace(")", "").strip()
+            grammar_tag = grammar_tag_raw.split("\n")[0].replace(":", "").replace(")", "").strip()
             # 만약 줄바꿈이 없어서 설명까지 딸려왔다면 대비책
             if len(grammar_tag) > 30:
                 grammar_tag = state.get("expected_tag", "None")
@@ -313,7 +273,7 @@ def feedback_node(state: TutorState) -> Dict[str, Any]:
     if "Explanation" in raw_feedback:
          try:
             explanation_raw = raw_feedback.split("Explanation")[1].split("5. 추천")[0]
-            explanation = explanation_raw.split("\\n")[0].replace(":", "").strip()
+            explanation = explanation_raw.split("\n")[0].replace(":", "").strip()
          except:
              pass
              
@@ -349,81 +309,110 @@ def verify_node(state: TutorState) -> Dict[str, Any]:
         
     print("[VerifyNode] 생성된 피드백의 정확성 및 환각(Hallucination) 검증 중...")
     
-    qa_prompt = f"""너는 매우 꼼꼼한 최고 수석 영어 교사(QA 리뷰어)야.
-아래에 제공된 '출제된 한국어 문제', '유저의 원본 입력', 그리고 '하급 튜터가 생성한 피드백'을 검토해 줘.
-
-[출제된 한국어 문제]: {state.get('current_question', '')}
-[유저 원본 입력]: {state['current_input']}
-[튜터 생성 피드백]:
-{state.get('feedback', '')}
-
-검토 기준:
-1. 튜터가 제시한 교정이 '출제된 한국어 문제'의 본래 의미와 문법적 의도를 잘 반영하여 채점했는가? (단순히 영어 문장 철자만 보지 말고, 원래 한국어 문장을 올바로 번역했는지 확인)
-2. 튜터가 제시한 교정 문장(Corrected Text)이 원어민 기준으로 100% 자연스럽고 완벽한가?
-3. 튜터가 설명(Explanation)한 문법 규칙이 사실에 부합하며 억지(Hallucination)가 없는가?
-
-만약 위 기준을 완벽하게 통과한다면, 어떠한 설명도 없이 대문자로 딱 한 단어 'PASS'만 출력해.
-만약 조금이라도 수정해야 할 부분이 있다면, 기존 튜터의 피드백 형식을 **그대로** 단 1자도 빼놓지 않고 지키면서 네가 직접 수정한 완벽한 버전의 전체 피드백을 다시 출력해 줘. 
-
-형식:
-1. 따뜻하고 분석적인 피드백 메시지 (과거 이력이 반영된 내용)
-2. 수정된 완벽한 원어민 문장 (Corrected Text)
-3. 핵심 문법 오류 태그 단어 1개 (Grammar Tag) - 짧은 영어 단어
-4. 오답 이유에 대한 간단한 한국어 설명 (Explanation)
-5. 추천 표현 (Better Expression) - "일상에서는 이렇게 쓰면 좋습니다: ~" 같이 원어민들이 더 자주 쓰는 자연스러운 구어체 대안 1개 제안
-"""
+    qa_prompt = PROMPTS["verify"]["qa_prompt"].format(
+        current_question=state.get('current_question', ''),
+        current_input=state['current_input'],
+        feedback=state.get('feedback', '')
+    )
     
-    reviewer_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0)
+    reviewer_llm = ChatOpenAI(model="gpt-4o", temperature=0.0)
     validation_res = reviewer_llm.invoke(qa_prompt).content.strip()
     
-    if validation_res == "PASS":
+    if "PASS" in validation_res.upper()[:10]:
         print("[VerifyNode] 검증 통과 (오류 없음).")
-        return {}
+        return {"reviewer_feedback": ""} # 검증 통과 시 루프 종료 신호
     
-    print("[VerifyNode] ⚠️ 피드백에서 오류를 발견했습니다! 피드백을 교정 및 덮어씁니다.")
+    retry_count = state.get("retry_count", 0)
     
-    raw_feedback = validation_res
-    feedback = raw_feedback
-    corrected_text = state.get("corrected_text", "")
-    grammar_tag = state.get("grammar_tag", "")
-    explanation = state.get("explanation", "")
-    
-    if "Corrected Text" in raw_feedback:
-        try:
-            corrected_text = raw_feedback.split("Corrected Text")[1].split("\\n")[0].replace(":", "").replace(")", "").strip()
-        except:
-            pass
-            
-    if "Grammar Tag" in raw_feedback:
-         try:
-            grammar_tag_raw = raw_feedback.split("Grammar Tag")[1].split("4. 오답")[0]
-            grammar_tag = grammar_tag_raw.split("\\n")[0].replace(":", "").replace(")", "").strip()
-            if len(grammar_tag) > 30:
-                grammar_tag = state.get("expected_tag", "None")
-         except:
-             pass
+    if retry_count >= 2:
+        print("[VerifyNode] ⚠️ 최대 재시도 횟수 초과. 더 이상 반복하지 않고 현재 생성된 피드백을 강제로 채택합니다.")
+        return {"reviewer_feedback": ""}
+        
+    print(f"[VerifyNode] ⚠️ 피드백에서 오류를 발견했습니다! 튜터에게 재작성을 요청합니다. (재시도 {retry_count + 1}/2)")
+    print(f"=== 검증관 피드백: {validation_res}")
 
-    if "Explanation" in raw_feedback:
-         try:
-            explanation_raw = raw_feedback.split("Explanation")[1].split("5. 추천")[0]
-            explanation = explanation_raw.split("\\n")[0].replace(":", "").replace(")", "").strip()
-         except:
-             pass
-             
-    if "Better Expression" in raw_feedback:
-         try:
-            better_expression_raw = raw_feedback.split("Better Expression")[1]
-            better_expression = better_expression_raw.replace(":", "").replace(")", "").strip()
-         except:
-             pass
-             
+    # 생성된 피드백 텍스트 내용을 직접 덮어쓰지 않고, 
+    # 검증관의 피드백만 상태에 담아서 돌려보내면 LangGraph 루프가 FeedbackNode로 돌아감.
     return {
-        "feedback": feedback,
-        "corrected_text": corrected_text,
-        "grammar_tag": grammar_tag,
-        "explanation": explanation,
-        "better_expression": better_expression
+        "reviewer_feedback": validation_res,
+        "retry_count": retry_count + 1
     }
+
+
+    
+
+# # 루브릭 검증 적용
+# def verify_node(state: TutorState) -> Dict[str, Any]:
+#     intent = state.get("intent", "translation")
+    
+#     # 일반 질문이거나 완벽한 정답인 경우 검증을 패스합니다.
+#     if intent != "translation" or state.get("is_correct"):
+#         print("[VerifyNode] 완벽한 정답이거나 오답 피드백이 아니므로 검증을 스킵합니다.")
+#         return {"reviewer_feedback": ""}
+        
+#     print("[VerifyNode] 루브릭(Rubric) 기반 정밀 검증 및 환각 체크 중...")
+    
+#     print("=================")
+#     print("1. 출제된 한국어 문제: ", state.get('current_question', ''))
+#     print("2. 유저의 원본 입력: ", state['current_input'])
+#     print("3. 과거 오답 이력(RAG): ", state.get('history_context', '없음'))
+#     print("4. feedback : ", state.get('feedback', ''))
+#     print("=================")
+
+
+#     # 루브릭 기반의 엄격한 프롬프트 구성
+#     qa_prompt = f"""당신은 까다롭기로 유명한 '수석 영어 교육 에디터'입니다.
+# 아래 제공된 [데이터]를 바탕으로 튜터의 피드백을 검토하고, **단 하나의 루브릭이라도 미달되면 즉시 REJECT** 하십시오.
+
+# [데이터]
+# 1. 출제된 한국어 문제: {state.get('current_question', '')}
+# 2. 유저의 원본 입력: {state['current_input']}
+# 3. 과거 오답 이력(RAG): {state.get('history_context', '없음')}
+# 4. 튜터 생성 피드백:
+# ---
+# {state.get('feedback', '')}
+# ---
+
+# [검수 루브릭 - 아래 중 하나라도 해당하면 REJECT]
+# 1. **의도 불일치**: 튜터가 제시한 '튜터 생성 피드백'이 원래 '출제된 한국어 문제'의 시제, 강조점, 뉘앙스를 제대로 살리지 못했는가?
+# 2. **역번역(Back-translation) 오류**: 튜터의 '튜터 생성 피드백'을 기반으로 다시 영어 문장을 만들면, 기존의 '출제된 한국어 문제' 와 문장 의미가 일치하는가?
+# 3. **기억력 결핍**: [과거 오답 이력]이 존재함에도 불구하고, 피드백에서 이를 언급하며 유저의 습관을 지적하지 않았는가? (이력이 있을 때만 해당)
+# 4. **설명 환각**: 튜터가 설명한 문법 규칙이 틀렸거나, 유저가 하지 않은 실수를 지적하는 등 환각 증상이 있는가?
+
+# [응답 규칙]
+# - 모든 루브릭을 완벽히 통과할 경우에만: 'PASS' 출력.
+# - 하나라도 문제가 있을 경우: 'REJECT'라고 명시하고, 몇 번 루브릭 위반인지와 함께 **튜터가 다음 번에 어떻게 수정해야 하는지 구체적인 가이드라인**을 작성하십시오.
+# """
+    
+#     # 검증 노드는 일관성을 위해 temperature를 0으로 고정합니다.
+#     # 성능을 위해 gpt-4o를 사용하는 것을 강력 추천하지만, 기존 환경에 맞춰 유지합니다.
+#     reviewer_llm = ChatOpenAI(model="gpt-4o", temperature=0.0) 
+#     validation_res = reviewer_llm.invoke(qa_prompt).content.strip()
+    
+#     # 'PASS' 여부 확인 (대소문자 무관, 앞부분 일치 확인)
+#     if validation_res.upper().startswith("PASS"):
+#         print("[VerifyNode] ✅ 모든 루브릭 통과 (PASS).")
+#         return {"reviewer_feedback": ""} 
+    
+#     retry_count = state.get("retry_count", 0)
+    
+#     # 최대 재시도 체크
+#     if retry_count >= 2:
+#         print("[VerifyNode] ⚠️ 최대 재시도(2회)를 초과했습니다. 품질이 낮더라도 현재 피드백을 종료합니다.")
+#         return {"reviewer_feedback": ""}
+        
+#     print(f"[VerifyNode] ❌ REJECT 발생! 지적 사항: {validation_res[:100]}...")
+#     print(f"            (재시도 카운트: {retry_count + 1}/2)")
+    
+#     # 검증 결과(비판)를 reviewer_feedback에 담아 FeedbackNode로 되돌려 보냄
+#     return {
+#         "reviewer_feedback": validation_res,
+#         "retry_count": retry_count + 1
+#     }
+
+
+
+
 
 # 5. SaveNode 구현
 def save_node(state: TutorState) -> Dict[str, Any]:
@@ -469,7 +458,16 @@ def build_tutor_graph() -> StateGraph:
     workflow.set_entry_point("retrieve")
     workflow.add_edge("retrieve", "feedback")
     workflow.add_edge("feedback", "verify")
-    workflow.add_edge("verify", "save")
+    
+    # 💡 [AI 스터디 포인트] Conditional Edges (조건부 간선)
+    # verify_node의 결과(reviewer_feedback 유무)에 따라 어디로 갈지 결정하는 라우팅 함수
+    def route_after_verify(state: TutorState) -> str:
+        if state.get("reviewer_feedback"):
+            return "feedback" # 반려 사유가 있으면 다시 피드백을 작성하러 감
+        return "save"         # 통과했으면 저장하러 감
+        
+    workflow.add_conditional_edges("verify", route_after_verify, {"feedback": "feedback", "save": "save"})
+    
     workflow.add_edge("save", END)
     
     return workflow.compile()
@@ -489,7 +487,10 @@ if __name__ == "__main__":
         "feedback": "",
         "corrected_text": "",
         "grammar_tag": "",
-        "explanation": ""
+        "explanation": "",
+        "better_expression": "",
+        "retry_count": 0,
+        "reviewer_feedback": ""
     }
     
     print("=== Core Engine Test Run ===")
