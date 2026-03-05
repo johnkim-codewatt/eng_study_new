@@ -1,40 +1,136 @@
+@import url("https://cdn.jsdelivr.net/gh/Dalgona/neodgm-webfont@1.530/neodgm/style.css");
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: "Nunito", sans-serif;
+  --font-mono: "NeoDunggeunmo", monospace;
+  --color-dos-blue: #0000a8;
+  --color-dos-cyan: #54fcfc;
+  --color-dos-white: #fcfcfc;
+  --color-dos-black: #000000;
+  --color-dos-yellow: #fcfc54;
+
+  --color-duo-green: #58cc02;
+  --color-duo-green-dark: #58a700;
+  --color-duo-blue: #1cb0f6;
+  --color-duo-text: #4b4b4b;
+  --color-duo-bg: #ffffff;
+  --color-duo-border: #e5e5e5;
+  --color-duo-card: #ffffff;
 }
 
-:root {
-  --background: #0a0a0a;
-  --foreground: #22c55e;
+/* Default (Retro) Configuration */
+:root,
+[data-theme="retro"] {
+  --background: #0000a8;
+  /* DOS Blue */
+  --foreground: #fcfcfc;
+  /* DOS White */
+  --accent: #54fcfc;
+  /* DOS Cyan for highlights */
+  --highlight-bg: #fcfcfc;
+  /* White for selected items */
+  --highlight-fg: #000000;
+  /* Black text when selected */
+  --error: #fc5454;
+  /* DOS Red */
+  --warning: #fcfc54;
+  /* DOS Yellow */
+  --font-primary: "NeoDunggeunmo", monospace;
+  --border-width: 4px;
+}
+
+/* Duo (Modern Duolingo) Configuration */
+[data-theme="duo"] {
+  --background: #f7f7f7;
+  /* Very light grey */
+  --foreground: #4b4b4b;
+  /* Dark grey text */
+  --accent: #58cc02;
+  /* Duo Green */
+  --highlight-bg: #ddf4ff;
+  /* Light blue for selected items */
+  --highlight-fg: #1cb0f6;
+  /* Duo Blue text when selected */
+  --error: #ff4b4b;
+  /* Soft Red */
+  --warning: #ffc800;
+  /* Yellow */
+  --font-primary: "Nunito", sans-serif;
+  --border-width: 2px;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-mono), monospace;
+  font-family: var(--font-mono);
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  /* Anti-aliasing off for pixel perfect look */
+  -webkit-font-smoothing: none;
+  font-smooth: never;
 }
 
 /* Custom Scrollbar for Terminal Texture */
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 16px;
+  /* Thicker for DOS feel */
 }
+
 ::-webkit-scrollbar-track {
-  background: #0a0a0a;
+  background: #000000;
+  border-left: 2px solid var(--foreground);
 }
+
 ::-webkit-scrollbar-thumb {
-  background: #22c55e;
-  border-radius: 4px;
+  background: #0000a8;
+  border: 2px solid var(--foreground);
 }
 
 .blink {
-  animation: blinker 1s linear infinite;
+  animation: blinker 1s step-end infinite;
+  /* step-end for sharp DOS blink */
 }
 
 @keyframes blinker {
-  50% { opacity: 0; }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* CRT Scanline Effect */
+.crt-overlay {
+  content: " ";
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+  z-index: 50;
+  background-size: 100% 8px, 6px 100%;
+  /* Increased gap from 4px to 8px */
+  pointer-events: none;
+}
+
+/* CRT Screen Flicker */
+.crt-flicker {
+  animation: flicker 0.15s infinite;
+}
+
+@keyframes flicker {
+  0% {
+    opacity: 0.98;
+  }
+
+  50% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0.98;
+  }
 }
